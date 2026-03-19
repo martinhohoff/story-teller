@@ -77,6 +77,16 @@ h1 {
   color: var(--muted);
 }
 
+.error-banner {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(139, 40, 20, 0.1);
+  color: #8b2814;
+  border: 1px solid rgba(139, 40, 20, 0.16);
+  line-height: 1.5;
+}
+
 .intro {
   margin: 14px 0 0;
   font-size: 1rem;

@@ -7,12 +7,14 @@ const storyPromptInput = document.querySelector("#story-prompt");
 const storyModelInput = document.querySelector("#story-model");
 const voiceInput = document.querySelector("#voice");
 const languageInput = document.querySelector("#language");
+const startButton = document.querySelector("#start-button");
 const pauseButton = document.querySelector("#pause-button");
 const resumeButton = document.querySelector("#resume-button");
 const stopButton = document.querySelector("#stop-button");
 const statusPill = document.querySelector("#status-pill");
 const segmentCount = document.querySelector("#segment-count");
 const nowPlaying = document.querySelector("#now-playing");
+const errorBanner = document.querySelector("#error-banner");
 const storyLog = document.querySelector("#story-log");
 
 const state = {
@@ -20,20 +22,42 @@ const state = {
   isRunning: false,
   isPaused: false,
   isPreparing: false,
-  activeAudio: null,
+  activeUtterance: null,
+  currentSegment: null,
+  availableVoices: [],
   currentConfig: null,
   storyHistory: [],
   queue: [],
   queuedPromise: null,
 };
 
-loadSettings();
-renderButtons();
+initializeApp();
 
-form.addEventListener("submit", handleStart);
-pauseButton.addEventListener("click", pauseStory);
-resumeButton.addEventListener("click", resumeStory);
-stopButton.addEventListener("click", stopStory);
+function initializeApp() {
+  try {
+    loadSettings();
+    loadVoices();
+    startButton.addEventListener("click", handleStart);
+    pauseButton.addEventListener("click", pauseStory);
+    resumeButton.addEventListener("click", resumeStory);
+    stopButton.addEventListener("click", stopStory);
+
+    window.addEventListener("error", (event) => {
+      showError(event.error?.message || event.message || "Unexpected browser error.");
+    });
+
+    window.addEventListener("unhandledrejection", (event) => {
+      showError(event.reason?.message || "Unexpected async browser error.");
+    });
+
+    updateStatus("Idle", "idle");
+    nowPlaying.textContent = "Nothing is playing yet.";
+    clearError();
+    renderButtons();
+  } catch (error) {
+    showError(error.message || "App initialization failed.");
+  }
+}
 
 function loadSettings() {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -64,7 +88,9 @@ function saveSettings() {
 }
 
 async function handleStart(event) {
-  event.preventDefault();
+  if (event) {
+    event.preventDefault();
+  }
 
   const apiKey = apiKeyInput.value.trim();
   const premise = storyPromptInput.value.trim();
@@ -74,11 +100,13 @@ async function handleStart(event) {
 
   if (!apiKey || !premise) {
     updateStatus("Please add both the API key and a story idea.", "idle");
+    showError("Add both the API key and a story idea, then start again.");
     return;
   }
 
   stopStory();
   saveSettings();
+  clearError();
 
   state.sessionId += 1;
   state.isRunning = true;
@@ -120,24 +148,24 @@ async function handleStart(event) {
 }
 
 function pauseStory() {
-  if (!state.activeAudio || state.isPaused) {
+  if (!state.activeUtterance || state.isPaused) {
     return;
   }
 
   state.isPaused = true;
-  state.activeAudio.pause();
+  window.speechSynthesis.pause();
   updateStatus("Paused", "paused");
   nowPlaying.textContent = "Playback paused.";
   renderButtons();
 }
 
 function resumeStory() {
-  if (!state.activeAudio || !state.isPaused) {
+  if (!state.activeUtterance || !state.isPaused) {
     return;
   }
 
   state.isPaused = false;
-  state.activeAudio.play().catch(failSession);
+  window.speechSynthesis.resume();
   updateStatus("Playing", "playing");
   nowPlaying.textContent = "Story playback resumed.";
   renderButtons();
@@ -149,26 +177,45 @@ function stopStory() {
   state.isPreparing = false;
   state.queue = [];
   state.queuedPromise = null;
+  state.currentSegment = null;
 
-  if (state.activeAudio) {
-    state.activeAudio.pause();
-    cleanupAudio(state.activeAudio);
-    state.activeAudio = null;
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
   }
+
+  state.activeUtterance = null;
 
   renderButtons();
 }
 
 function renderButtons() {
   const running = state.isRunning;
-  pauseButton.disabled = !running || state.isPaused || !state.activeAudio;
-  resumeButton.disabled = !running || !state.isPaused || !state.activeAudio;
-  stopButton.disabled = !running && !state.activeAudio && state.queue.length === 0;
+  pauseButton.disabled = !running || state.isPaused || !state.activeUtterance;
+  resumeButton.disabled = !running || !state.isPaused || !state.activeUtterance;
+  stopButton.disabled = !running && !state.activeUtterance && state.queue.length === 0;
 }
 
 function updateStatus(message, tone) {
   statusPill.textContent = message;
   statusPill.className = `status-pill ${tone}`;
+}
+
+function showError(message) {
+  if (!errorBanner) {
+    return;
+  }
+
+  errorBanner.hidden = false;
+  errorBanner.textContent = message;
+}
+
+function clearError() {
+  if (!errorBanner) {
+    return;
+  }
+
+  errorBanner.hidden = true;
+  errorBanner.textContent = "";
 }
 
 function enqueueSegment(segment) {
@@ -222,49 +269,14 @@ async function playNextSegment() {
     story: nextSegment.story,
     languageTag: nextSegment.languageTag,
   });
+  state.currentSegment = nextSegment;
 
   appendStoryEntry(nextSegment, storyIndex);
   nowPlaying.textContent = `Playing part ${storyIndex} in ${nextSegment.languageTag}.`;
   updateStatus("Playing", "playing");
-
-  const audio = new Audio(nextSegment.audioUrl);
-  state.activeAudio = audio;
   renderButtons();
 
-  audio.addEventListener("ended", () => {
-    cleanupAudio(audio);
-
-    if (state.activeAudio === audio) {
-      state.activeAudio = null;
-    }
-
-    if (!state.isRunning) {
-      updateStatus("Stopped", "idle");
-      nowPlaying.textContent = "Story stopped.";
-      renderButtons();
-      return;
-    }
-
-    playNextSegment();
-  });
-
-  audio.addEventListener("error", () => {
-    failSession(new Error("Audio playback failed."));
-  });
-
-  audio.addEventListener(
-    "play",
-    () => {
-      prepareUpcomingSegment().catch(failSession);
-    },
-    { once: true }
-  );
-
-  try {
-    await audio.play();
-  } catch (error) {
-    failSession(new Error("Playback was blocked. Start the story again and keep the tab active."));
-  }
+  speakSegment(nextSegment, storyIndex);
 }
 
 async function prepareUpcomingSegment() {
@@ -317,23 +329,9 @@ async function createSegment({ config, storyHistory, isFirstSegment, sessionId }
     return null;
   }
 
-  const audioUrl = await requestSpeech({
-    apiKey: config.apiKey,
-    voice: config.voice,
-    languageTag: storyPayload.languageTag || config.languageTag,
-    text: storyPayload.story,
-    sessionId,
-  });
-
-  if (!state.isRunning || sessionId !== state.sessionId) {
-    URL.revokeObjectURL(audioUrl);
-    return null;
-  }
-
   return {
     story: storyPayload.story,
     languageTag: storyPayload.languageTag || config.languageTag,
-    audioUrl,
   };
 }
 
@@ -406,49 +404,6 @@ ${isFirstSegment ? "Write the first segment." : `Continue naturally from these r
   };
 }
 
-async function requestSpeech({ apiKey, voice, languageTag, text, sessionId }) {
-  const normalizedLanguage = sanitizeLanguageTag(languageTag) || "pt-BR";
-
-  const response = await fetch(`${OPENAI_URL}/audio/speech`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini-tts",
-      voice,
-      input: text,
-      language: normalizedLanguage,
-      format: "mp3",
-      instructions: buildSpeechInstructions(normalizedLanguage),
-    }),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || "Could not create speech audio.");
-  }
-
-  const blob = await response.blob();
-
-  if (!state.isRunning || sessionId !== state.sessionId) {
-    return "";
-  }
-
-  return URL.createObjectURL(blob);
-}
-
-function buildSpeechInstructions(languageTag) {
-  const normalized = sanitizeLanguageTag(languageTag) || "pt-BR";
-
-  if (normalized.toLowerCase() === "pt-br") {
-    return "Read in natural Brazilian Portuguese with warm, expressive storytelling pacing.";
-  }
-
-  return `Read naturally in ${normalized} with clear storytelling pacing and a warm tone.`;
-}
-
 function extractResponseText(data) {
   if (typeof data.output_text === "string" && data.output_text.trim()) {
     return data.output_text;
@@ -513,15 +468,106 @@ function guessLanguageTag(text) {
   return "en-US";
 }
 
-function cleanupAudio(audio) {
-  if (audio?.src?.startsWith("blob:")) {
-    URL.revokeObjectURL(audio.src);
+function loadVoices() {
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    return;
   }
+
+  const syncVoices = () => {
+    state.availableVoices = window.speechSynthesis.getVoices();
+  };
+
+  syncVoices();
+
+  if (typeof window.speechSynthesis.addEventListener === "function") {
+    window.speechSynthesis.addEventListener("voiceschanged", syncVoices);
+    return;
+  }
+
+  if ("onvoiceschanged" in window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = syncVoices;
+  }
+}
+
+function speakSegment(segment, storyIndex) {
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    failSession(new Error("This browser does not support speech synthesis."));
+    return;
+  }
+
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(segment.story);
+  utterance.lang = sanitizeLanguageTag(segment.languageTag) || "pt-BR";
+  utterance.rate = 0.95;
+  utterance.pitch = 1;
+
+  const preferredVoice = pickVoice(
+    utterance.lang,
+    state.currentConfig?.voice || "",
+    state.availableVoices
+  );
+
+  if (preferredVoice) {
+    utterance.voice = preferredVoice;
+  }
+
+  utterance.onstart = () => {
+    state.activeUtterance = utterance;
+    updateStatus("Playing", "playing");
+    renderButtons();
+    prepareUpcomingSegment().catch(failSession);
+  };
+
+  utterance.onend = () => {
+    if (state.activeUtterance === utterance) {
+      state.activeUtterance = null;
+    }
+
+    if (!state.isRunning) {
+      updateStatus("Stopped", "idle");
+      nowPlaying.textContent = "Story stopped.";
+      renderButtons();
+      return;
+    }
+
+    nowPlaying.textContent = `Finished part ${storyIndex}. Preparing the next one...`;
+    renderButtons();
+    playNextSegment();
+  };
+
+  utterance.onerror = (event) => {
+    if (event.error === "interrupted" && !state.isRunning) {
+      return;
+    }
+
+    failSession(new Error("Speech playback failed in this browser."));
+  };
+
+  state.activeUtterance = utterance;
+  window.speechSynthesis.speak(utterance);
+}
+
+function pickVoice(languageTag, selectedVoice, voices) {
+  if (!voices.length) {
+    return null;
+  }
+
+  const normalizedTag = languageTag.toLowerCase();
+  const exactMatch = voices.find((voice) => voice.lang.toLowerCase() === normalizedTag);
+  const baseLanguage = normalizedTag.split("-")[0];
+  const sameLanguage = voices.find((voice) => voice.lang.toLowerCase().startsWith(`${baseLanguage}-`));
+  const brazilianVoice = voices.find((voice) => voice.lang.toLowerCase() === "pt-br");
+  const nameMatch = voices.find((voice) => voice.name.toLowerCase().includes(selectedVoice.toLowerCase()));
+
+  return exactMatch || sameLanguage || brazilianVoice || nameMatch || voices[0];
 }
 
 function failSession(error) {
   console.error(error);
   stopStory();
   updateStatus("Error", "idle");
-  nowPlaying.textContent = error.message || "Something went wrong.";
+  const message = error.message || "Something went wrong.";
+  nowPlaying.textContent = message;
+  showError(message);
 }

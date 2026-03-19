@@ -77,7 +77,7 @@
           </p>
 
           <div class="actions">
-            <button id="start-button" type="submit">Start story</button>
+            <button id="start-button" type="button">Start story</button>
             <button id="pause-button" type="button" class="secondary" disabled>Pause</button>
             <button id="resume-button" type="button" class="secondary" disabled>Resume</button>
             <button id="stop-button" type="button" class="secondary danger" disabled>Stop</button>
@@ -87,16 +87,17 @@
 
       <section class="story-card">
         <div class="status-row">
-          <span id="status-pill" class="status-pill idle">Idle</span>
+          <span id="status-pill" class="status-pill idle">Loading...</span>
           <span id="segment-count" class="segment-count">0 parts</span>
         </div>
 
-        <p id="now-playing" class="now-playing">Nothing is playing yet.</p>
+        <p id="now-playing" class="now-playing">Loading app...</p>
+        <p id="error-banner" class="error-banner" hidden></p>
 
         <div id="story-log" class="story-log" aria-live="polite"></div>
       </section>
     </main>
 
-    <script type="module" src="./app.js"></script>
+    <script defer src="./app.js"></script>
   </body>
 </html>
