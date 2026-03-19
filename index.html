@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Story Teller</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero-card">
+        <p class="eyebrow">Endless mobile storytelling</p>
+        <h1>Story Teller</h1>
+        <p class="intro">
+          Type a story idea, choose a voice, and let the app keep the tale going without closing it.
+          The next chapter is prepared while the current one is playing.
+        </p>
+
+        <form id="story-form" class="story-form">
+          <label class="field">
+            <span>OpenAI API key</span>
+            <input
+              id="api-key"
+              name="apiKey"
+              type="password"
+              autocomplete="off"
+              placeholder="sk-..."
+              required
+            />
+          </label>
+
+          <label class="field">
+            <span>Story idea</span>
+            <textarea
+              id="story-prompt"
+              name="storyPrompt"
+              rows="5"
+              placeholder="Uma menina descobre uma porta escondida no quintal que leva para um mercado de nuvens..."
+              required
+            ></textarea>
+          </label>
+
+          <div class="grid">
+            <label class="field">
+              <span>Story model</span>
+              <select id="story-model" name="storyModel">
+                <option value="gpt-5-mini">gpt-5-mini</option>
+                <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Voice</span>
+              <select id="voice" name="voice">
+                <option value="marin">marin</option>
+                <option value="cedar">cedar</option>
+                <option value="coral">coral</option>
+                <option value="nova">nova</option>
+                <option value="alloy">alloy</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Reading language</span>
+            <input
+              id="language"
+              name="language"
+              type="text"
+              placeholder="Auto detect from prompt. Example: pt-BR"
+            />
+          </label>
+
+          <p class="notice">
+            The voice is AI-generated. Your API key stays in this browser and is stored only on this
+            device.
+          </p>
+
+          <div class="actions">
+            <button id="start-button" type="submit">Start story</button>
+            <button id="pause-button" type="button" class="secondary" disabled>Pause</button>
+            <button id="resume-button" type="button" class="secondary" disabled>Resume</button>
+            <button id="stop-button" type="button" class="secondary danger" disabled>Stop</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="story-card">
+        <div class="status-row">
+          <span id="status-pill" class="status-pill idle">Idle</span>
+          <span id="segment-count" class="segment-count">0 parts</span>
+        </div>
+
+        <p id="now-playing" class="now-playing">Nothing is playing yet.</p>
+
+        <div id="story-log" class="story-log" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
