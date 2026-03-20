@@ -59,6 +59,10 @@ function initializeApp() {
   }
 }
 
+function updateSegmentCount() {
+  segmentCount.textContent = `${state.storyHistory.length + state.queue.length} parts`;
+}
+
 function loadSettings() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
@@ -123,10 +127,11 @@ async function handleStart(event) {
   };
 
   storyLog.innerHTML = "";
-  segmentCount.textContent = "0 parts";
+  updateSegmentCount();
   nowPlaying.textContent = "Preparing the first part of the story...";
   updateStatus("Creating the first story part...", "loading");
   renderButtons();
+  primeSpeechPlayback();
 
   try {
     const firstSegment = await createSegment({
@@ -220,7 +225,7 @@ function clearError() {
 
 function enqueueSegment(segment) {
   state.queue.push(segment);
-  segmentCount.textContent = `${state.storyHistory.length + state.queue.length} parts`;
+  updateSegmentCount();
 }
 
 function appendStoryEntry(segment, index) {
@@ -244,7 +249,6 @@ async function playNextSegment() {
   }
 
   const nextSegment = state.queue.shift();
-  segmentCount.textContent = `${state.storyHistory.length + state.queue.length} parts`;
 
   if (!nextSegment) {
     updateStatus("Preparing the next part...", "loading");
@@ -270,11 +274,13 @@ async function playNextSegment() {
     languageTag: nextSegment.languageTag,
   });
   state.currentSegment = nextSegment;
+  updateSegmentCount();
 
   appendStoryEntry(nextSegment, storyIndex);
   nowPlaying.textContent = `Playing part ${storyIndex} in ${nextSegment.languageTag}.`;
   updateStatus("Playing", "playing");
   renderButtons();
+  prepareUpcomingSegment().catch(failSession);
 
   speakSegment(nextSegment, storyIndex);
 }
@@ -489,6 +495,24 @@ function loadVoices() {
   }
 }
 
+function primeSpeechPlayback() {
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    return;
+  }
+
+  try {
+    const primer = new SpeechSynthesisUtterance(" ");
+    primer.volume = 0;
+    primer.rate = 1;
+    primer.pitch = 1;
+    primer.lang = state.currentConfig?.languageTag || "en-US";
+    window.speechSynthesis.speak(primer);
+    window.speechSynthesis.cancel();
+  } catch (error) {
+    console.warn("Could not prime speech playback", error);
+  }
+}
+
 function speakSegment(segment, storyIndex) {
   if (typeof window === "undefined" || !window.speechSynthesis) {
     failSession(new Error("This browser does not support speech synthesis."));
@@ -516,7 +540,6 @@ function speakSegment(segment, storyIndex) {
     state.activeUtterance = utterance;
     updateStatus("Playing", "playing");
     renderButtons();
-    prepareUpcomingSegment().catch(failSession);
   };
 
   utterance.onend = () => {
