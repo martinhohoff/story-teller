@@ -37,6 +37,7 @@ const state = {
   textPreparingPartIndex: null,
   audioPreparingPartIndex: null,
   renderedSegments: new Map(),
+  playbackPrimed: false,
 };
 
 initializeApp();
@@ -75,33 +76,32 @@ function refreshStatusDetail() {
   const details = [];
   const nextQueuedSegment = state.queue[0];
   const nextQueuedPartIndex = state.currentPartIndex ? state.currentPartIndex + 1 : null;
+  const currentPartIndex = state.currentPartIndex;
 
-  if (state.isPaused && state.currentPartIndex) {
-    details.push(`Paused on part ${state.currentPartIndex}`);
-  } else if (state.activeAudio && state.currentPartIndex) {
-    details.push(`Playing part ${state.currentPartIndex}`);
-  } else if (state.audioPreparingPartIndex) {
-    details.push(`Generating audio for part ${state.audioPreparingPartIndex}`);
+  if (state.isPaused && currentPartIndex) {
+    details.push(`Paused on part ${currentPartIndex}`);
+  } else if (state.activeAudio && currentPartIndex) {
+    details.push(`Playing part ${currentPartIndex}`);
+  } else if (currentPartIndex && state.audioPreparingPartIndex === currentPartIndex) {
+    details.push(`Generating audio for part ${currentPartIndex}`);
   } else if (state.textPreparingPartIndex) {
     details.push(`Generating text for part ${state.textPreparingPartIndex}`);
   } else {
     details.push("Nothing is playing yet.");
   }
 
-  if (state.textPreparingPartIndex && !details.includes(`Generating text for part ${state.textPreparingPartIndex}`)) {
-    details.push(`Generating text for part ${state.textPreparingPartIndex}`);
-  }
+  if (nextQueuedPartIndex) {
+    if (state.textPreparingPartIndex === nextQueuedPartIndex) {
+      details.push(`Generating text for part ${nextQueuedPartIndex}`);
+    } else if (nextQueuedSegment) {
+      details.push(`Text for part ${nextQueuedPartIndex} ready`);
+    }
 
-  if (state.audioPreparingPartIndex && !details.includes(`Generating audio for part ${state.audioPreparingPartIndex}`)) {
-    details.push(`Generating audio for part ${state.audioPreparingPartIndex}`);
-  }
-
-  if (nextQueuedSegment && nextQueuedPartIndex) {
-    details.push(`Text for part ${nextQueuedPartIndex} ready`);
-  }
-
-  if (state.preloadedAudio?.segmentId === nextQueuedSegment?.id && nextQueuedPartIndex) {
-    details.push(`Audio for part ${nextQueuedPartIndex} ready`);
+    if (state.audioPreparingPartIndex === nextQueuedPartIndex) {
+      details.push(`Generating audio for part ${nextQueuedPartIndex}`);
+    } else if (state.preloadedAudio?.segmentId === nextQueuedSegment?.id && nextQueuedSegment) {
+      details.push(`Audio for part ${nextQueuedPartIndex} ready`);
+    }
   }
 
   nowPlaying.textContent = details.join(" • ");
@@ -154,6 +154,7 @@ async function startStory(premiseOverride = "") {
   stopStory();
   saveSettings();
   clearError();
+  await primeAudioPlayback();
 
   state.sessionId += 1;
   state.isRunning = true;
@@ -256,6 +257,27 @@ function createRandomStoryPrompt() {
   return `Conte uma história calma, carinhosa e encantadora para uma criança de 4 anos sobre ${protagonist} e ${companion} em ${place}, enquanto eles saem para ${goal}. Use linguagem simples, imagens suaves, sensação de segurança e um clima aconchegante de aventura antes de dormir.`;
 }
 
+async function primeAudioPlayback() {
+  if (state.playbackPrimed) {
+    return;
+  }
+
+  try {
+    const primer = new Audio(
+      "data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAFAAAGhgCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqg=="
+    );
+    primer.playsInline = true;
+    primer.muted = true;
+
+    await primer.play();
+    primer.pause();
+    primer.currentTime = 0;
+    state.playbackPrimed = true;
+  } catch (error) {
+    console.warn("Could not prime mobile audio playback", error);
+  }
+}
+
 function handleRandomStoryStart(event) {
   if (event) {
     event.preventDefault();
@@ -323,6 +345,7 @@ function stopStory() {
 
 function renderButtons() {
   const running = state.isRunning;
+  startButton.textContent = running ? "Restart story" : "Start story";
   pauseButton.disabled = !running || state.isPaused || !state.activeAudio;
   resumeButton.disabled = !running || !state.isPaused || !state.activeAudio;
   stopButton.disabled = !running && !state.activeAudio && state.queue.length === 0;
