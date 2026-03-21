@@ -77,13 +77,18 @@ function refreshStatusDetail() {
   const nextQueuedSegment = state.queue[0];
   const nextQueuedPartIndex = state.currentPartIndex ? state.currentPartIndex + 1 : null;
   const currentPartIndex = state.currentPartIndex;
+  const isSessionStarting = state.isRunning && !state.activeAudio && !currentPartIndex;
 
   if (state.isPaused && currentPartIndex) {
     details.push(`Paused on part ${currentPartIndex}`);
   } else if (state.activeAudio && currentPartIndex) {
     details.push(`Playing part ${currentPartIndex}`);
+  } else if (isSessionStarting && state.audioPreparingPartIndex === 1) {
+    details.push("Generating audio for part 1");
   } else if (currentPartIndex && state.audioPreparingPartIndex === currentPartIndex) {
     details.push(`Generating audio for part ${currentPartIndex}`);
+  } else if (isSessionStarting && state.textPreparingPartIndex === 1) {
+    details.push("Generating text for part 1");
   } else if (state.textPreparingPartIndex) {
     details.push(`Generating text for part ${state.textPreparingPartIndex}`);
   } else {
@@ -91,16 +96,14 @@ function refreshStatusDetail() {
   }
 
   if (nextQueuedPartIndex) {
-    if (state.textPreparingPartIndex === nextQueuedPartIndex) {
-      details.push(`Generating text for part ${nextQueuedPartIndex}`);
-    } else if (nextQueuedSegment) {
-      details.push(`Text for part ${nextQueuedPartIndex} ready`);
-    }
-
     if (state.audioPreparingPartIndex === nextQueuedPartIndex) {
       details.push(`Generating audio for part ${nextQueuedPartIndex}`);
     } else if (state.preloadedAudio?.segmentId === nextQueuedSegment?.id && nextQueuedSegment) {
       details.push(`Audio for part ${nextQueuedPartIndex} ready`);
+    } else if (state.textPreparingPartIndex === nextQueuedPartIndex) {
+      details.push(`Generating text for part ${nextQueuedPartIndex}`);
+    } else if (nextQueuedSegment) {
+      details.push(`Text for part ${nextQueuedPartIndex} ready`);
     }
   }
 
