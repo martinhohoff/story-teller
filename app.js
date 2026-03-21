@@ -4,6 +4,7 @@ const OPENAI_URL = "https://api.openai.com/v1";
 const form = document.querySelector("#story-form");
 const apiKeyInput = document.querySelector("#api-key");
 const storyPromptInput = document.querySelector("#story-prompt");
+const randomStoryButton = document.querySelector("#random-story-button");
 const storyModelInput = document.querySelector("#story-model");
 const voiceInput = document.querySelector("#voice");
 const languageInput = document.querySelector("#language");
@@ -13,7 +14,6 @@ const pauseButton = document.querySelector("#pause-button");
 const resumeButton = document.querySelector("#resume-button");
 const stopButton = document.querySelector("#stop-button");
 const statusPill = document.querySelector("#status-pill");
-const segmentCount = document.querySelector("#segment-count");
 const nowPlaying = document.querySelector("#now-playing");
 const errorBanner = document.querySelector("#error-banner");
 const storyLog = document.querySelector("#story-log");
@@ -30,6 +30,13 @@ const state = {
   storyHistory: [],
   queue: [],
   queuedPromise: null,
+  preloadedAudio: null,
+  preloadedAudioPromise: null,
+  segmentIdCounter: 0,
+  currentPartIndex: null,
+  textPreparingPartIndex: null,
+  audioPreparingPartIndex: null,
+  renderedSegments: new Map(),
 };
 
 initializeApp();
@@ -38,6 +45,8 @@ function initializeApp() {
   try {
     loadSettings();
     startButton.addEventListener("click", handleStart);
+    randomStoryButton.addEventListener("click", handleRandomStoryStart);
+    storyPromptInput.addEventListener("input", syncRandomStoryButton);
     pauseButton.addEventListener("click", pauseStory);
     resumeButton.addEventListener("click", resumeStory);
     stopButton.addEventListener("click", stopStory);
@@ -51,16 +60,51 @@ function initializeApp() {
     });
 
     updateStatus("Idle", "idle");
-    nowPlaying.textContent = "Nothing is playing yet.";
+    refreshStatusDetail();
     clearError();
+    syncRandomStoryButton();
     renderButtons();
   } catch (error) {
     showError(error.message || "App initialization failed.");
   }
 }
 
-function updateSegmentCount() {
-  segmentCount.textContent = `${state.storyHistory.length + state.queue.length} parts`;
+function updateSegmentCount() {}
+
+function refreshStatusDetail() {
+  const details = [];
+  const nextQueuedSegment = state.queue[0];
+  const nextQueuedPartIndex = state.currentPartIndex ? state.currentPartIndex + 1 : null;
+
+  if (state.isPaused && state.currentPartIndex) {
+    details.push(`Paused on part ${state.currentPartIndex}`);
+  } else if (state.activeAudio && state.currentPartIndex) {
+    details.push(`Playing part ${state.currentPartIndex}`);
+  } else if (state.audioPreparingPartIndex) {
+    details.push(`Generating audio for part ${state.audioPreparingPartIndex}`);
+  } else if (state.textPreparingPartIndex) {
+    details.push(`Generating text for part ${state.textPreparingPartIndex}`);
+  } else {
+    details.push("Nothing is playing yet.");
+  }
+
+  if (state.textPreparingPartIndex && !details.includes(`Generating text for part ${state.textPreparingPartIndex}`)) {
+    details.push(`Generating text for part ${state.textPreparingPartIndex}`);
+  }
+
+  if (state.audioPreparingPartIndex && !details.includes(`Generating audio for part ${state.audioPreparingPartIndex}`)) {
+    details.push(`Generating audio for part ${state.audioPreparingPartIndex}`);
+  }
+
+  if (nextQueuedSegment && nextQueuedPartIndex) {
+    details.push(`Text for part ${nextQueuedPartIndex} ready`);
+  }
+
+  if (state.preloadedAudio?.segmentId === nextQueuedSegment?.id && nextQueuedPartIndex) {
+    details.push(`Audio for part ${nextQueuedPartIndex} ready`);
+  }
+
+  nowPlaying.textContent = details.join(" • ");
 }
 
 function loadSettings() {
@@ -93,13 +137,9 @@ function saveSettings() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 }
 
-async function handleStart(event) {
-  if (event) {
-    event.preventDefault();
-  }
-
+async function startStory(premiseOverride = "") {
   const apiKey = apiKeyInput.value.trim();
-  const premise = storyPromptInput.value.trim();
+  const premise = (premiseOverride || storyPromptInput.value).trim();
   const storyModel = storyModelInput.value;
   const voice = voiceInput.value;
   const languageTag = (languageInput.value.trim() || guessLanguageTag(premise)).trim();
@@ -121,6 +161,12 @@ async function handleStart(event) {
   state.storyHistory = [];
   state.queue = [];
   state.queuedPromise = null;
+  state.preloadedAudio = null;
+  state.preloadedAudioPromise = null;
+  state.currentPartIndex = null;
+  state.textPreparingPartIndex = null;
+  state.audioPreparingPartIndex = null;
+  state.renderedSegments = new Map();
   state.currentConfig = {
     apiKey,
     premise,
@@ -132,7 +178,8 @@ async function handleStart(event) {
 
   storyLog.innerHTML = "";
   updateSegmentCount();
-  nowPlaying.textContent = "Preparing the first part of the story...";
+  state.textPreparingPartIndex = 1;
+  refreshStatusDetail();
   updateStatus("Creating the first story part...", "loading");
   renderButtons();
 
@@ -155,6 +202,78 @@ async function handleStart(event) {
   }
 }
 
+async function handleStart(event) {
+  if (event) {
+    event.preventDefault();
+  }
+
+  await startStory();
+}
+
+function syncRandomStoryButton() {
+  if (!randomStoryButton) {
+    return;
+  }
+
+  randomStoryButton.hidden = storyPromptInput.value.trim().length > 0;
+}
+
+function createRandomStoryPrompt() {
+  const protagonists = [
+    "uma coelhinha curiosa",
+    "um ursinho muito gentil",
+    "uma estrelinha que caiu pertinho do quintal",
+    "um patinho que adora cantar baixinho",
+    "uma nuvem fofinha que gosta de passear",
+  ];
+  const companions = [
+    "uma borboleta brilhante",
+    "um gatinho sonolento",
+    "uma tartaruga sorridente",
+    "um vaga-lume dourado",
+    "uma joaninha corajosa",
+  ];
+  const places = [
+    "um jardim cheio de flores macias",
+    "uma floresta colorida e tranquila",
+    "um caminho de nuvens cor-de-rosa",
+    "um lago calminho com patos amigos",
+    "uma vila pequena com casinhas redondas",
+  ];
+  const goals = [
+    "procurar uma canção que faz todo mundo dormir feliz",
+    "encontrar uma luzinha perdida antes da hora de dormir",
+    "levar um abraço mágico para um amigo triste",
+    "descobrir de onde vem o cheirinho doce do vento",
+    "achar o lugar perfeito para um piquenique de luar",
+  ];
+
+  const protagonist = protagonists[Math.floor(Math.random() * protagonists.length)];
+  const companion = companions[Math.floor(Math.random() * companions.length)];
+  const place = places[Math.floor(Math.random() * places.length)];
+  const goal = goals[Math.floor(Math.random() * goals.length)];
+
+  return `Conte uma história calma, carinhosa e encantadora para uma criança de 4 anos sobre ${protagonist} e ${companion} em ${place}, enquanto eles saem para ${goal}. Use linguagem simples, imagens suaves, sensação de segurança e um clima aconchegante de aventura antes de dormir.`;
+}
+
+function handleRandomStoryStart(event) {
+  if (event) {
+    event.preventDefault();
+  }
+
+  const prompt = createRandomStoryPrompt();
+  storyPromptInput.value = prompt;
+  storyPromptInput.dispatchEvent(new Event("input", { bubbles: true }));
+  storyPromptInput.dispatchEvent(new Event("change", { bubbles: true }));
+  syncRandomStoryButton();
+  storyPromptInput.focus();
+  storyPromptInput.setSelectionRange(0, 0);
+
+  window.requestAnimationFrame(() => {
+    startStory(prompt).catch(failSession);
+  });
+}
+
 function pauseStory() {
   if (!state.activeAudio || state.isPaused) {
     return;
@@ -163,7 +282,7 @@ function pauseStory() {
   state.isPaused = true;
   state.activeAudio.pause();
   updateStatus("Paused", "paused");
-  nowPlaying.textContent = "Playback paused.";
+  refreshStatusDetail();
   renderButtons();
 }
 
@@ -176,7 +295,7 @@ function resumeStory() {
     .then(() => {
       state.isPaused = false;
       updateStatus("Playing", "playing");
-      nowPlaying.textContent = "Story playback resumed.";
+      refreshStatusDetail();
       renderButtons();
     })
     .catch(() => {
@@ -191,7 +310,13 @@ function stopStory() {
   state.queue = [];
   state.queuedPromise = null;
   state.currentSegment = null;
+  state.currentPartIndex = null;
+  state.textPreparingPartIndex = null;
+  state.audioPreparingPartIndex = null;
   cleanupActiveAudio();
+  cleanupPreloadedAudio();
+  updateMediaSession();
+  refreshStatusDetail();
 
   renderButtons();
 }
@@ -206,6 +331,21 @@ function renderButtons() {
 function updateStatus(message, tone) {
   statusPill.textContent = message;
   statusPill.className = `status-pill ${tone}`;
+}
+
+function updateMediaSession({ title = "Story Teller", playbackState = "none" } = {}) {
+  if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
+    return;
+  }
+
+  if (typeof MediaMetadata === "function") {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title,
+      artist: "Story Teller",
+    });
+  }
+
+  navigator.mediaSession.playbackState = playbackState;
 }
 
 function showError(message) {
@@ -229,21 +369,69 @@ function clearError() {
 function enqueueSegment(segment) {
   state.queue.push(segment);
   updateSegmentCount();
+  preloadUpcomingAudio().catch(failSession);
+  refreshStatusDetail();
 }
 
 function appendStoryEntry(segment, index) {
   const article = document.createElement("article");
   article.className = "story-entry";
+  article.dataset.segmentId = String(segment.id);
 
   const heading = document.createElement("h2");
   heading.textContent = `Part ${index}`;
 
   const body = document.createElement("p");
-  body.textContent = segment.story;
+  body.className = "story-body";
 
-  article.append(heading, body);
+  const progressMeta = document.createElement("div");
+  progressMeta.className = "story-progress-meta";
+
+  const progressLabel = document.createElement("span");
+  progressLabel.textContent = "Estimated narration progress: 0%";
+
+  const progressBar = document.createElement("div");
+  progressBar.className = "story-progress-bar";
+
+  const progressFill = document.createElement("span");
+  progressFill.className = "story-progress-fill";
+  progressBar.append(progressFill);
+
+  progressMeta.append(progressLabel);
+  article.append(heading, body, progressMeta, progressBar);
   storyLog.append(article);
+  state.renderedSegments.set(segment.id, {
+    article,
+    body,
+    progressLabel,
+    progressFill,
+    story: segment.story,
+  });
+  renderSegmentProgress(segment.id, 0, false);
   article.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function renderSegmentProgress(segmentId, ratio, isActive) {
+  const rendered = state.renderedSegments.get(segmentId);
+
+  if (!rendered) {
+    return;
+  }
+
+  const clampedRatio = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
+  rendered.body.textContent = rendered.story;
+  rendered.article.classList.toggle("is-active", isActive);
+  rendered.progressRatio = clampedRatio;
+  rendered.progressFill.style.width = `${clampedRatio * 100}%`;
+  rendered.progressLabel.textContent = `Estimated narration progress: ${Math.round(clampedRatio * 100)}%`;
+}
+
+function updatePlaybackProgress(segmentId, audio) {
+  if (!audio?.duration || !Number.isFinite(audio.duration)) {
+    return;
+  }
+
+  renderSegmentProgress(segmentId, audio.currentTime / audio.duration, true);
 }
 
 async function playNextSegment() {
@@ -277,10 +465,12 @@ async function playNextSegment() {
     languageTag: nextSegment.languageTag,
   });
   state.currentSegment = nextSegment;
+  state.currentPartIndex = storyIndex;
   updateSegmentCount();
 
   appendStoryEntry(nextSegment, storyIndex);
-  nowPlaying.textContent = `Preparing audio for part ${storyIndex} in ${nextSegment.languageTag}.`;
+  state.audioPreparingPartIndex = storyIndex;
+  refreshStatusDetail();
   updateStatus("Preparing audio...", "loading");
   renderButtons();
   prepareUpcomingSegment().catch(failSession);
@@ -294,6 +484,8 @@ async function prepareUpcomingSegment() {
   }
 
   const sessionId = state.sessionId;
+  state.textPreparingPartIndex = state.storyHistory.length + state.queue.length + 1;
+  refreshStatusDetail();
   state.isPreparing = true;
   updateStatus("Preparing the next part...", "loading");
 
@@ -313,10 +505,13 @@ async function prepareUpcomingSegment() {
     .finally(() => {
       state.queuedPromise = null;
       state.isPreparing = false;
+      state.textPreparingPartIndex = null;
 
       if (state.isRunning && !state.isPaused) {
         updateStatus("Playing", "playing");
       }
+
+      refreshStatusDetail();
     });
 
   state.queuedPromise = pending;
@@ -339,6 +534,7 @@ async function createSegment({ config, storyHistory, isFirstSegment, sessionId }
   }
 
   return {
+    id: ++state.segmentIdCounter,
     story: storyPayload.story,
     languageTag: storyPayload.languageTag || config.languageTag,
   };
@@ -477,7 +673,13 @@ function guessLanguageTag(text) {
   return "en-US";
 }
 
-function cleanupActiveAudio() {
+function cleanupActiveAudio(markComplete = false) {
+  if (state.currentSegment?.id) {
+    const rendered = state.renderedSegments.get(state.currentSegment.id);
+    const lastRatio = rendered?.progressRatio || 0;
+    renderSegmentProgress(state.currentSegment.id, markComplete ? 1 : lastRatio, false);
+  }
+
   if (state.activeAudio) {
     state.activeAudio.pause();
     state.activeAudio.src = "";
@@ -488,6 +690,15 @@ function cleanupActiveAudio() {
     URL.revokeObjectURL(state.activeAudioUrl);
     state.activeAudioUrl = "";
   }
+}
+
+function cleanupPreloadedAudio() {
+  if (state.preloadedAudio?.audioUrl) {
+    URL.revokeObjectURL(state.preloadedAudio.audioUrl);
+  }
+
+  state.preloadedAudio = null;
+  state.preloadedAudioPromise = null;
 }
 
 function buildVoiceInstructions(languageTag, voiceStyle) {
@@ -536,8 +747,7 @@ async function requestSpeechAudio({ apiKey, voice, languageTag, voiceStyle, stor
   return response.blob();
 }
 
-async function playSegmentAudio(segment, storyIndex) {
-  const sessionId = state.sessionId;
+async function createPreloadedAudioAsset(segment, sessionId) {
   const audioBlob = await requestSpeechAudio({
     apiKey: state.currentConfig.apiKey,
     voice: state.currentConfig.voice,
@@ -547,12 +757,95 @@ async function playSegmentAudio(segment, storyIndex) {
   });
 
   if (!state.isRunning || sessionId !== state.sessionId) {
-    return;
+    return null;
   }
 
-  cleanupActiveAudio();
+  return {
+    segmentId: segment.id,
+    audioUrl: URL.createObjectURL(audioBlob),
+  };
+}
 
-  const audioUrl = URL.createObjectURL(audioBlob);
+async function preloadUpcomingAudio() {
+  const nextSegment = state.queue[0];
+
+  if (!state.isRunning || !nextSegment) {
+    return null;
+  }
+
+  if (state.preloadedAudio?.segmentId === nextSegment.id) {
+    return state.preloadedAudio;
+  }
+
+  if (state.preloadedAudioPromise) {
+    return state.preloadedAudioPromise;
+  }
+
+  if (state.preloadedAudio) {
+    cleanupPreloadedAudio();
+  }
+
+  const sessionId = state.sessionId;
+  state.audioPreparingPartIndex = state.storyHistory.length + 1;
+  refreshStatusDetail();
+  state.preloadedAudioPromise = createPreloadedAudioAsset(nextSegment, sessionId)
+    .then((asset) => {
+      if (!asset) {
+        return null;
+      }
+
+      const isStillQueued = state.queue.some((segment) => segment.id === asset.segmentId);
+
+      if (!isStillQueued) {
+        URL.revokeObjectURL(asset.audioUrl);
+        return null;
+      }
+
+      state.preloadedAudio = asset;
+      return asset;
+    })
+    .finally(() => {
+      state.preloadedAudioPromise = null;
+      if (state.preloadedAudio?.segmentId === nextSegment.id || !state.queue.some((segment) => segment.id === nextSegment.id)) {
+        state.audioPreparingPartIndex = null;
+      }
+      refreshStatusDetail();
+    });
+
+  return state.preloadedAudioPromise;
+}
+
+async function playSegmentAudio(segment, storyIndex) {
+  const sessionId = state.sessionId;
+  cleanupActiveAudio();
+  let audioUrl = "";
+
+  if (state.preloadedAudio?.segmentId === segment.id) {
+    audioUrl = state.preloadedAudio.audioUrl;
+    state.preloadedAudio = null;
+  } else {
+    const pendingPreload = state.preloadedAudioPromise;
+
+    if (pendingPreload) {
+      const pendingAsset = await pendingPreload;
+
+      if (pendingAsset?.segmentId === segment.id) {
+        audioUrl = pendingAsset.audioUrl;
+        state.preloadedAudio = null;
+      }
+    }
+
+    if (!audioUrl) {
+      const preloadedAsset = await createPreloadedAudioAsset(segment, sessionId);
+
+      if (!preloadedAsset) {
+        return;
+      }
+
+      audioUrl = preloadedAsset.audioUrl;
+    }
+  }
+
   const audio = new Audio(audioUrl);
   audio.preload = "auto";
   audio.playsInline = true;
@@ -560,6 +853,9 @@ async function playSegmentAudio(segment, storyIndex) {
   state.activeAudio = audio;
   state.activeAudioUrl = audioUrl;
   state.isPaused = false;
+  state.audioPreparingPartIndex = null;
+  preloadUpcomingAudio().catch(failSession);
+  refreshStatusDetail();
 
   audio.addEventListener("play", () => {
     if (state.activeAudio !== audio) {
@@ -567,7 +863,22 @@ async function playSegmentAudio(segment, storyIndex) {
     }
 
     updateStatus("Playing", "playing");
-    nowPlaying.textContent = `Playing part ${storyIndex} in ${segment.languageTag}.`;
+    state.currentPartIndex = storyIndex;
+    refreshStatusDetail();
+    updateMediaSession({
+      title: `Part ${storyIndex}`,
+      playbackState: "playing",
+    });
+    renderSegmentProgress(segment.id, 0, true);
+    renderButtons();
+  });
+
+  audio.addEventListener("timeupdate", () => {
+    if (state.activeAudio !== audio) {
+      return;
+    }
+
+    updatePlaybackProgress(segment.id, audio);
     renderButtons();
   });
 
@@ -576,16 +887,21 @@ async function playSegmentAudio(segment, storyIndex) {
       return;
     }
 
-    cleanupActiveAudio();
+    cleanupActiveAudio(true);
+    updateMediaSession({
+      title: `Part ${storyIndex}`,
+      playbackState: "paused",
+    });
 
     if (!state.isRunning) {
       updateStatus("Stopped", "idle");
-      nowPlaying.textContent = "Story stopped.";
+      refreshStatusDetail();
       renderButtons();
       return;
     }
 
-    nowPlaying.textContent = `Finished part ${storyIndex}. Preparing the next one...`;
+    state.currentPartIndex = null;
+    refreshStatusDetail();
     renderButtons();
     playNextSegment();
   });
@@ -606,7 +922,7 @@ async function playSegmentAudio(segment, storyIndex) {
     if (error?.name === "NotAllowedError") {
       state.isPaused = true;
       updateStatus("Tap Resume", "paused");
-      nowPlaying.textContent = `Audio for part ${storyIndex} is ready. Tap Resume to start playback.`;
+      refreshStatusDetail();
       renderButtons();
       return;
     }
@@ -620,6 +936,8 @@ function failSession(error) {
   stopStory();
   updateStatus("Error", "idle");
   const message = error.message || "Something went wrong.";
+  state.textPreparingPartIndex = null;
+  state.audioPreparingPartIndex = null;
   nowPlaying.textContent = message;
   showError(message);
 }
