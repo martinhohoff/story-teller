@@ -18,7 +18,7 @@ http://127.0.0.1:3000
 
 - You enter your OpenAI API key and a story premise.
 - The app generates the first segment of the story.
-- It converts that segment to speech.
+- It converts that segment to speech with OpenAI TTS.
 - While the current segment is playing, it prepares the next one so the story can continue.
 
 ## Language behavior

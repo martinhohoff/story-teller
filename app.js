@@ -7,6 +7,7 @@ const storyPromptInput = document.querySelector("#story-prompt");
 const storyModelInput = document.querySelector("#story-model");
 const voiceInput = document.querySelector("#voice");
 const languageInput = document.querySelector("#language");
+const voiceStyleInput = document.querySelector("#voice-style");
 const startButton = document.querySelector("#start-button");
 const pauseButton = document.querySelector("#pause-button");
 const resumeButton = document.querySelector("#resume-button");
@@ -22,9 +23,9 @@ const state = {
   isRunning: false,
   isPaused: false,
   isPreparing: false,
-  activeUtterance: null,
+  activeAudio: null,
+  activeAudioUrl: "",
   currentSegment: null,
-  availableVoices: [],
   currentConfig: null,
   storyHistory: [],
   queue: [],
@@ -36,7 +37,6 @@ initializeApp();
 function initializeApp() {
   try {
     loadSettings();
-    loadVoices();
     startButton.addEventListener("click", handleStart);
     pauseButton.addEventListener("click", pauseStory);
     resumeButton.addEventListener("click", resumeStory);
@@ -75,6 +75,7 @@ function loadSettings() {
     storyModelInput.value = saved.storyModel || "gpt-5-mini";
     voiceInput.value = saved.voice || "marin";
     languageInput.value = saved.language || "";
+    voiceStyleInput.value = saved.voiceStyle || "Warm, expressive, immersive storyteller.";
   } catch (error) {
     console.warn("Could not restore settings", error);
   }
@@ -86,6 +87,7 @@ function saveSettings() {
     storyModel: storyModelInput.value,
     voice: voiceInput.value,
     language: languageInput.value.trim(),
+    voiceStyle: voiceStyleInput.value.trim(),
   };
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
@@ -101,6 +103,7 @@ async function handleStart(event) {
   const storyModel = storyModelInput.value;
   const voice = voiceInput.value;
   const languageTag = (languageInput.value.trim() || guessLanguageTag(premise)).trim();
+  const voiceStyle = voiceStyleInput.value.trim();
 
   if (!apiKey || !premise) {
     updateStatus("Please add both the API key and a story idea.", "idle");
@@ -124,6 +127,7 @@ async function handleStart(event) {
     storyModel,
     voice,
     languageTag,
+    voiceStyle,
   };
 
   storyLog.innerHTML = "";
@@ -131,7 +135,6 @@ async function handleStart(event) {
   nowPlaying.textContent = "Preparing the first part of the story...";
   updateStatus("Creating the first story part...", "loading");
   renderButtons();
-  primeSpeechPlayback();
 
   try {
     const firstSegment = await createSegment({
@@ -153,27 +156,32 @@ async function handleStart(event) {
 }
 
 function pauseStory() {
-  if (!state.activeUtterance || state.isPaused) {
+  if (!state.activeAudio || state.isPaused) {
     return;
   }
 
   state.isPaused = true;
-  window.speechSynthesis.pause();
+  state.activeAudio.pause();
   updateStatus("Paused", "paused");
   nowPlaying.textContent = "Playback paused.";
   renderButtons();
 }
 
 function resumeStory() {
-  if (!state.activeUtterance || !state.isPaused) {
+  if (!state.activeAudio || !state.isPaused) {
     return;
   }
 
-  state.isPaused = false;
-  window.speechSynthesis.resume();
-  updateStatus("Playing", "playing");
-  nowPlaying.textContent = "Story playback resumed.";
-  renderButtons();
+  state.activeAudio.play()
+    .then(() => {
+      state.isPaused = false;
+      updateStatus("Playing", "playing");
+      nowPlaying.textContent = "Story playback resumed.";
+      renderButtons();
+    })
+    .catch(() => {
+      showError("Tap resume again if playback is blocked by this browser.");
+    });
 }
 
 function stopStory() {
@@ -183,21 +191,16 @@ function stopStory() {
   state.queue = [];
   state.queuedPromise = null;
   state.currentSegment = null;
-
-  if (typeof window !== "undefined" && window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-  }
-
-  state.activeUtterance = null;
+  cleanupActiveAudio();
 
   renderButtons();
 }
 
 function renderButtons() {
   const running = state.isRunning;
-  pauseButton.disabled = !running || state.isPaused || !state.activeUtterance;
-  resumeButton.disabled = !running || !state.isPaused || !state.activeUtterance;
-  stopButton.disabled = !running && !state.activeUtterance && state.queue.length === 0;
+  pauseButton.disabled = !running || state.isPaused || !state.activeAudio;
+  resumeButton.disabled = !running || !state.isPaused || !state.activeAudio;
+  stopButton.disabled = !running && !state.activeAudio && state.queue.length === 0;
 }
 
 function updateStatus(message, tone) {
@@ -277,12 +280,12 @@ async function playNextSegment() {
   updateSegmentCount();
 
   appendStoryEntry(nextSegment, storyIndex);
-  nowPlaying.textContent = `Playing part ${storyIndex} in ${nextSegment.languageTag}.`;
-  updateStatus("Playing", "playing");
+  nowPlaying.textContent = `Preparing audio for part ${storyIndex} in ${nextSegment.languageTag}.`;
+  updateStatus("Preparing audio...", "loading");
   renderButtons();
   prepareUpcomingSegment().catch(failSession);
 
-  speakSegment(nextSegment, storyIndex);
+  playSegmentAudio(nextSegment, storyIndex).catch(failSession);
 }
 
 async function prepareUpcomingSegment() {
@@ -474,78 +477,106 @@ function guessLanguageTag(text) {
   return "en-US";
 }
 
-function loadVoices() {
-  if (typeof window === "undefined" || !window.speechSynthesis) {
-    return;
+function cleanupActiveAudio() {
+  if (state.activeAudio) {
+    state.activeAudio.pause();
+    state.activeAudio.src = "";
+    state.activeAudio = null;
   }
 
-  const syncVoices = () => {
-    state.availableVoices = window.speechSynthesis.getVoices();
-  };
-
-  syncVoices();
-
-  if (typeof window.speechSynthesis.addEventListener === "function") {
-    window.speechSynthesis.addEventListener("voiceschanged", syncVoices);
-    return;
-  }
-
-  if ("onvoiceschanged" in window.speechSynthesis) {
-    window.speechSynthesis.onvoiceschanged = syncVoices;
+  if (state.activeAudioUrl) {
+    URL.revokeObjectURL(state.activeAudioUrl);
+    state.activeAudioUrl = "";
   }
 }
 
-function primeSpeechPlayback() {
-  if (typeof window === "undefined" || !window.speechSynthesis) {
-    return;
+function buildVoiceInstructions(languageTag, voiceStyle) {
+  const instructionParts = [
+    "Read this like a polished storyteller for a mobile storytelling app.",
+    `Speak naturally in ${languageTag || "the requested language"}.`,
+  ];
+
+  if (voiceStyle) {
+    instructionParts.push(`Voice style: ${voiceStyle}.`);
   }
 
-  try {
-    const primer = new SpeechSynthesisUtterance(" ");
-    primer.volume = 0;
-    primer.rate = 1;
-    primer.pitch = 1;
-    primer.lang = state.currentConfig?.languageTag || "en-US";
-    window.speechSynthesis.speak(primer);
-    window.speechSynthesis.cancel();
-  } catch (error) {
-    console.warn("Could not prime speech playback", error);
-  }
+  instructionParts.push("Use expressive pacing, clear pronunciation, and a warm narrative tone.");
+  return instructionParts.join(" ");
 }
 
-function speakSegment(segment, storyIndex) {
-  if (typeof window === "undefined" || !window.speechSynthesis) {
-    failSession(new Error("This browser does not support speech synthesis."));
-    return;
-  }
+async function requestSpeechAudio({ apiKey, voice, languageTag, voiceStyle, story }) {
+  const response = await fetch(`${OPENAI_URL}/audio/speech`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini-tts",
+      voice,
+      input: story,
+      instructions: buildVoiceInstructions(languageTag, voiceStyle),
+      response_format: "mp3",
+    }),
+  });
 
-  window.speechSynthesis.cancel();
+  if (!response.ok) {
+    let message = "Could not generate speech audio.";
 
-  const utterance = new SpeechSynthesisUtterance(segment.story);
-  utterance.lang = sanitizeLanguageTag(segment.languageTag) || "pt-BR";
-  utterance.rate = 0.95;
-  utterance.pitch = 1;
-
-  const preferredVoice = pickVoice(
-    utterance.lang,
-    state.currentConfig?.voice || "",
-    state.availableVoices
-  );
-
-  if (preferredVoice) {
-    utterance.voice = preferredVoice;
-  }
-
-  utterance.onstart = () => {
-    state.activeUtterance = utterance;
-    updateStatus("Playing", "playing");
-    renderButtons();
-  };
-
-  utterance.onend = () => {
-    if (state.activeUtterance === utterance) {
-      state.activeUtterance = null;
+    try {
+      const errorData = await response.json();
+      message = errorData.error?.message || message;
+    } catch (error) {
+      console.warn("Could not parse TTS error response", error);
     }
+
+    throw new Error(message);
+  }
+
+  return response.blob();
+}
+
+async function playSegmentAudio(segment, storyIndex) {
+  const sessionId = state.sessionId;
+  const audioBlob = await requestSpeechAudio({
+    apiKey: state.currentConfig.apiKey,
+    voice: state.currentConfig.voice,
+    languageTag: segment.languageTag,
+    voiceStyle: state.currentConfig.voiceStyle,
+    story: segment.story,
+  });
+
+  if (!state.isRunning || sessionId !== state.sessionId) {
+    return;
+  }
+
+  cleanupActiveAudio();
+
+  const audioUrl = URL.createObjectURL(audioBlob);
+  const audio = new Audio(audioUrl);
+  audio.preload = "auto";
+  audio.playsInline = true;
+
+  state.activeAudio = audio;
+  state.activeAudioUrl = audioUrl;
+  state.isPaused = false;
+
+  audio.addEventListener("play", () => {
+    if (state.activeAudio !== audio) {
+      return;
+    }
+
+    updateStatus("Playing", "playing");
+    nowPlaying.textContent = `Playing part ${storyIndex} in ${segment.languageTag}.`;
+    renderButtons();
+  });
+
+  audio.addEventListener("ended", () => {
+    if (state.activeAudio !== audio) {
+      return;
+    }
+
+    cleanupActiveAudio();
 
     if (!state.isRunning) {
       updateStatus("Stopped", "idle");
@@ -557,33 +588,31 @@ function speakSegment(segment, storyIndex) {
     nowPlaying.textContent = `Finished part ${storyIndex}. Preparing the next one...`;
     renderButtons();
     playNextSegment();
-  };
+  });
 
-  utterance.onerror = (event) => {
-    if (event.error === "interrupted" && !state.isRunning) {
+  audio.addEventListener("error", () => {
+    if (state.activeAudio !== audio) {
       return;
     }
 
-    failSession(new Error("Speech playback failed in this browser."));
-  };
+    failSession(new Error("Audio playback failed in this browser."));
+  });
 
-  state.activeUtterance = utterance;
-  window.speechSynthesis.speak(utterance);
-}
+  renderButtons();
 
-function pickVoice(languageTag, selectedVoice, voices) {
-  if (!voices.length) {
-    return null;
+  try {
+    await audio.play();
+  } catch (error) {
+    if (error?.name === "NotAllowedError") {
+      state.isPaused = true;
+      updateStatus("Tap Resume", "paused");
+      nowPlaying.textContent = `Audio for part ${storyIndex} is ready. Tap Resume to start playback.`;
+      renderButtons();
+      return;
+    }
+
+    throw error;
   }
-
-  const normalizedTag = languageTag.toLowerCase();
-  const exactMatch = voices.find((voice) => voice.lang.toLowerCase() === normalizedTag);
-  const baseLanguage = normalizedTag.split("-")[0];
-  const sameLanguage = voices.find((voice) => voice.lang.toLowerCase().startsWith(`${baseLanguage}-`));
-  const brazilianVoice = voices.find((voice) => voice.lang.toLowerCase() === "pt-br");
-  const nameMatch = voices.find((voice) => voice.name.toLowerCase().includes(selectedVoice.toLowerCase()));
-
-  return exactMatch || sameLanguage || brazilianVoice || nameMatch || voices[0];
 }
 
 function failSession(error) {
