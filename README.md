@@ -29,4 +29,4 @@ http://127.0.0.1:3000
 
 ## Important note
 
-This version is browser-only and sends requests directly from the page to the OpenAI API. That is convenient for personal use and quick testing, but it is not the safest setup for a public app. If you want to publish it, the next step should be moving the OpenAI requests behind your own backend.
+This version is browser-only and sends requests directly from the page to the OpenAI API.
